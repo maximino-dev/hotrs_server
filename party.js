@@ -149,8 +149,6 @@ class Party {
 
 		const answerFmt = answer.toLowerCase().replace(/[^\w\s]/gi, '');
 
-		console.log(title, artist, answerFmt);
-
 		values.push(Party.jaccardSimilarityBigrams(answerFmt, title));
 		values.push(Party.jaccardSimilarityBigrams(answerFmt, artist));
 		values.push(Party.jaccardSimilarityBigrams(answerFmt, title + " " + artist));
