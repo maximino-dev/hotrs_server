@@ -142,13 +142,18 @@ class Party {
 	}
 
 	guess(answer) {
-		const title = this.tracks[this.currentTrack].title;
-		const artist = this.tracks[this.currentTrack].artist;
+		const title = this.tracks[this.currentTrack].title.toLowerCase().replace(/[^\w\s]/gi, '');
+		const artist = this.tracks[this.currentTrack].artist.toLowerCase().replace(/[^\w\s]/gi, '');
 
 		let values = [];
-		values.push(Party.jaccardSimilarityBigrams(answer.toLowerCase(), title.toLowerCase()));
-		values.push(Party.jaccardSimilarityBigrams(answer.toLowerCase(), artist.toLowerCase()));
-		values.push(Party.jaccardSimilarityBigrams(answer.toLowerCase(), title.toLowerCase() + " " + artist.toLowerCase()));
+
+		const answerFmt = answer.toLowerCase().replace(/[^\w\s]/gi, '');
+
+		console.log(title, artist, answerFmt);
+
+		values.push(Party.jaccardSimilarityBigrams(answerFmt, title));
+		values.push(Party.jaccardSimilarityBigrams(answerFmt, artist));
+		values.push(Party.jaccardSimilarityBigrams(answerFmt, title + " " + artist));
 		return values;
 	}
 
