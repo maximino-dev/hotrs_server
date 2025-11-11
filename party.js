@@ -142,12 +142,12 @@ class Party {
 	}
 
 	guess(answer) {
-		const title = this.tracks[this.currentTrack].title.toLowerCase().replace(/[^\w\s]/gi, '');
-		const artist = this.tracks[this.currentTrack].artist.toLowerCase().replace(/[^\w\s]/gi, '');
+		const title = this.tracks[this.currentTrack].title.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+		const artist = this.tracks[this.currentTrack].artist.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
 		let values = [];
 
-		const answerFmt = answer.toLowerCase().replace(/[^\w\s]/gi, '');
+		const answerFmt = answer.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
 		values.push(Party.jaccardSimilarityBigrams(answerFmt, title));
 		values.push(Party.jaccardSimilarityBigrams(answerFmt, artist));
