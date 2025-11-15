@@ -3,12 +3,17 @@ const cors = require('cors');
 const db = require('./db');
 const axios = require("axios");
 const { Party, Member, Track } = require('./party');
+const path = require('path');
 
 const app = express();
 
 const http = require('http');
 const server = http.createServer(app);
 const { Server } = require('socket.io');
+
+app.use('/solos', express.static(path.join(__dirname, 'solos'), {
+  index: false
+}));
 
 // Configuration CORS pour Socket.io
 const io = new Server(server, {
@@ -134,6 +139,41 @@ io.on('connection', (socket) => {
 
   });
 
+  // Changement de musique
+  socket.on('nextTrackSolomode', async ({ partyId }) => {
+    const p = parties.find(p => p.id === partyId);
+
+    try {
+      const track = p.getNextTrack();
+      p.resetFound();
+      if (typeof track === 'undefined') {
+        const player = p.getPlayerList()[0];
+        await addToLeaderboard(player.username, player.score, "solo");
+        p.stop();
+        await prepareSoloMode(p);
+        socket.emit('finishParty');
+      } else {
+        socket.emit('playTrack', { song_id: track.deezerId, duration: track.duration });
+      }
+    } catch (err) {
+      console.error('Erreur dans startParty :', err);
+    }
+
+  });
+
+  socket.on('startSolomode', async ({ partyId }) => {
+    const p = parties.find(p => p.id === partyId);
+
+
+    try {
+      const track = p.getCurrentTrack();
+      socket.emit('playTrack', { song_id: track.deezerId, duration: track.duration });
+    } catch (err) {
+      console.error('Erreur dans startParty :', err);
+    }
+
+  });
+
   socket.on('getCurrentTrack', ({ partyId }) => {
     const p = parties.find(p => p.id === partyId);
 
@@ -147,24 +187,36 @@ io.on('connection', (socket) => {
   
 
   // Réception d'une réponse à une question
-  socket.on('playerAnswer', ({ partyId, artistTitle }, callback) => {
+  socket.on('playerAnswer', ({ partyId, artistTitle, time }, callback) => {
 
     let changed = false;
     console.log(`📝 Réponse du joueur ${socket.id} dans ${partyId} : ${artistTitle}`);
     const p = parties.find(p => p.id === partyId);
+
+    const maxScorePerTrack = 100;
+    const maxTime = 30000; // 30 sec
+
+    const clampedTime = Math.min(Math.max(time, 0), maxTime);
+    const t = clampedTime / maxTime;
+    const k = 3; // contrôle la décroissance exponentielle
+    const multiplier = Math.exp(-k * t);
+
+    const addScore = (base) => Math.round(base * multiplier);
 
     try {
       const stats = p.guess(artistTitle);
       console.log(stats);
       if (stats[2] >= 0.8) {
         if (p.memberFoundArtist(socket.id) === false) {
-          p.memberAddScore(socket.id, 5);
+          p.memberAddScore(socket.id, addScore(maxScorePerTrack));
           p.setMemberFoundArtist(socket.id, true);
+          p.setMemberTimeArtist(socket.id, time);
           changed = true;
         }
         if (p.memberFoundTitle(socket.id) === false) {
-          p.memberAddScore(socket.id, 5);
+          p.memberAddScore(socket.id, addScore(maxScorePerTrack));
           p.setMemberFoundTitle(socket.id, true);
+          p.setMemberTimeTitle(socket.id, time);
           changed = true;
         }
           
@@ -175,16 +227,18 @@ io.on('connection', (socket) => {
         return callback({ success: true, result: "both" });
       } else if(stats[1] >= 0.6) {
         if (p.memberFoundArtist(socket.id) === false) {
-          p.memberAddScore(socket.id, 5);
+          p.memberAddScore(socket.id, addScore(maxScorePerTrack));
           p.setMemberFoundArtist(socket.id, true);
+          p.setMemberTimeArtist(socket.id, time);
           io.to(partyId).emit('partyUpdate', { players: p.getPlayerList() });
         }
 
         return callback({ success: true, result: "artist" });
       } else if (stats[0] >= 0.6) {
         if (p.memberFoundTitle(socket.id) === false) {
-          p.memberAddScore(socket.id, 5);
+          p.memberAddScore(socket.id, addScore(maxScorePerTrack));
           p.setMemberFoundTitle(socket.id, true);
+          p.setMemberTimeTitle(socket.id, time);
           io.to(partyId).emit('partyUpdate', { players: p.getPlayerList() });
         }
 
@@ -201,7 +255,6 @@ io.on('connection', (socket) => {
     io.to(partyId).emit("playTrack", { preview_link });
   });
 
-    // Rejoindre une partie existante
   socket.on('restartParty', ({ partyId }) => {
     const p = parties.find(p => p.id === partyId);
     if (p) {
@@ -235,6 +288,106 @@ io.on('connection', (socket) => {
       message,
       timestamp: Date.now()
     });
+  });
+
+  // Creation d'un mode solo
+  socket.on('joinSoloMode', async ({ username }, callback) => {
+    const partyId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+    const newParty = new Party(partyId, null, null, null, 10, null);
+    const creator = new Member(socket.id, username);
+
+    newParty.join(creator);
+    parties.push(newParty);
+    socket.join(partyId);
+
+    // Appel de prépare mode solo
+    try {
+      const prepResult = await prepareSoloMode(newParty);
+      if (prepResult.code !== 0) {
+        // Échec préparation
+        parties = parties.filter(p => p.id !== partyId);
+        callback({ success: false, message: prepResult.error || 'Erreur lors de la préparation du Blind Test'});
+        return;
+      }
+
+      // Préparation réussie, envoie les infos de la partie
+      console.log(`🎉 Partie créée : ${partyId} par ${username}`);
+
+      const track = newParty.getCurrentTrack();
+      socket.emit('playTrack', { song_id: track.deezerId, duration: track.duration });
+
+      callback({ success: true, partyId: partyId });
+
+    } catch (err) {
+      console.error('Erreur dans createParty / prepareBlindTest :', err);
+      callback({ success: false, message: 'Erreur serveur inattendue'});
+      parties = parties.filter(p => p.id !== partyId);
+    }
+
+  });
+
+  // Answer in a solo Mode (time is in milliseconds)
+  socket.on('playerSoloAnswer', ({ partyId, artistTitle, time }, callback) => {
+
+    console.log(`📝 Réponse du joueur ${socket.id} dans ${partyId} (mode solo) : ${artistTitle}`);
+    const p = parties.find(p => p.id === partyId);
+
+    const maxScorePerTrack = 100;
+    const maxTime = 30000; // 30 sec
+
+    const clampedTime = Math.min(Math.max(time, 0), maxTime);
+    const t = clampedTime / maxTime;
+    const k = 3; // contrôle la décroissance exponentielle
+    const multiplier = Math.exp(-k * t);
+
+    const addScore = (base) => Math.round(base * multiplier);
+
+    try {
+      const stats = p.guess(artistTitle);
+      console.log(stats);
+      if (stats[2] >= 0.8) {
+        if (p.memberFoundArtist(socket.id) === false) {
+          p.memberAddScore(socket.id, addScore(maxScorePerTrack));
+          p.setMemberFoundArtist(socket.id, true);
+        }
+        if (p.memberFoundTitle(socket.id) === false) {
+          p.memberAddScore(socket.id, addScore(maxScorePerTrack));
+          p.setMemberFoundTitle(socket.id, true);
+        }
+
+        return callback({ success: true, result: "both", score: p.memberGetScore(socket.id) });
+      } else if(stats[1] >= 0.6) {
+        if (p.memberFoundArtist(socket.id) === false) {
+          p.memberAddScore(socket.id, addScore(maxScorePerTrack));
+          p.setMemberFoundArtist(socket.id, true);
+        }
+
+        return callback({ success: true, result: "artist", score: p.memberGetScore(socket.id) });
+      } else if (stats[0] >= 0.6) {
+        if (p.memberFoundTitle(socket.id) === false) {
+          p.memberAddScore(socket.id, addScore(maxScorePerTrack));
+          p.setMemberFoundTitle(socket.id, true);
+        }
+
+        return callback({ success: true, result: "title", score: p.memberGetScore(socket.id) });
+      }
+      return callback({ success: false });
+    } catch (err) {
+      return callback({ success: false });
+    }
+  });
+
+  socket.on('getLeaderboard', async ({ mode }, callback) => {
+    try {
+      if (mode === "solo") {
+        const lb = await getDBLeaderboard(10);
+        return callback({ success: true, leaderboard: lb })
+      } else {
+        return callback({ success: false });
+      }
+    } catch (err) {
+      return callback({ success: false });
+    }
   });
 
 });
@@ -366,6 +519,102 @@ async function prepareBlindTest(party) {
     return ({ code: 1, error: 'Erreur serveur' });
   }
 }
+
+async function prepareSoloMode(party) {
+
+  let query = `SELECT * FROM solos`;
+
+  query += ` ORDER BY RANDOM() LIMIT 10`;
+
+  try {
+    const result = await db.query(query);
+    if (result.rows.length === 0) {
+      return ({ code: 1, error: 'Aucun morceau trouvé.' });
+    }
+
+    for (const row of result.rows) {
+      const track = new Track(row.filename, row.title, row.artist, row.cover_url, row.duration);
+      party.addTrack(track);
+    }
+
+    return ({ code: 0 });
+  } catch (err) {
+    console.error(err);
+    return ({ code: 1, error: 'Erreur serveur' });
+  }
+}
+
+async function getDBLeaderboard(limit = 10) {
+
+  let query = `SELECT * FROM leaderboard`;
+
+  const values = [];
+  const ldboard = [];
+
+  query += ` ORDER BY score DESC LIMIT $${values.length + 1}`;
+  values.push(limit);
+
+  try {
+    const result = await db.query(query, values);
+    if (result.rows.length === 0) {
+      return ({ code: 1, error: 'Aucun score trouvé.' });
+    }
+
+    for (const row of result.rows) {
+      ldboard.push({ username: row.username, score: row.score });
+    }
+
+    return ldboard;
+  } catch (err) {
+    console.error(err);
+    return 1;
+  }
+}
+
+async function addToLeaderboard(username, score, mode = "solo") {
+  try {
+    // Vérifier si le joueur existe déjà
+    const check = await db.query(
+      `SELECT score FROM leaderboard WHERE username = $1`,
+      [username]
+    );
+
+    if (check.rows.length > 0) {
+      const currentScore = check.rows[0].score;
+
+      // Mettre à jour uniquement si le nouveau score est supérieur
+      if (score > currentScore) {
+        await db.query(
+          `UPDATE leaderboard SET score = $1 WHERE username = $2`,
+          [score, username]
+        );
+      }
+
+      return { success: true, updated: true };
+    } else {
+      await db.query(
+        `INSERT INTO leaderboard (username, score, mode) VALUES ($1, $2, $3)`,
+        [username, score, mode]
+      );
+    }
+
+    // Suppression pour en garder maximum 100
+    await db.query(`
+      DELETE FROM leaderboard
+      WHERE username NOT IN (
+        SELECT username FROM leaderboard
+        ORDER BY score DESC
+        LIMIT 100
+      )
+    `);
+
+    return { success: true, created: true };
+  } catch (err) {
+    console.error("Erreur addToLeaderboard:", err);
+    return { success: false, error: err.message };
+  }
+}
+
 
 
 /* ======== SERVER ======== */

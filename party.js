@@ -1,9 +1,10 @@
 class Track {
-	constructor(deezerId, title, artist, coverUrl) {
+	constructor(deezerId, title, artist, coverUrl, duration = 0) {
 		this.deezerId = deezerId;
 		this.title = title;
 		this.artist = artist;
 		this.coverUrl = coverUrl;
+		this.duration = duration;
   }
 }
 
@@ -14,6 +15,8 @@ class Member {
 		this.score = 0;
 		this.foundTitle = false;
 		this.foundArtist = false;
+		this.timeArtist = 0;
+		this.timeTitle = 0;
   }
 }
 
@@ -44,7 +47,21 @@ class Party {
 	}
 
 	getPlayerList() {
-		return this.members.map(m => ({ id: m.id, username: m.username, score: m.score, foundTitle: m.foundTitle, foundArtist: m.foundArtist }));
+		return this.members.map(m => ({ id: m.id, 
+			username: m.username, 
+			score: m.score, 
+			foundTitle: m.foundTitle, 
+			foundArtist: m.foundArtist, 
+			timeArtist: (m.timeArtist / 1000).toFixed(2), 
+			timeTitle: (m.timeTitle / 1000).toFixed(2) }));
+	}
+
+	memberGetScore(socketId) {
+		const member = this.members.find(m => m.id === socketId);
+		if (member) {
+			return member.score;
+		}
+		return false;
 	}
 
 	memberExists(username) {
@@ -93,6 +110,24 @@ class Party {
 		const member = this.members.find(m => m.id === socketId);
 		if (member) {
 			member.foundArtist = val;
+			return true;
+		}
+		return false;
+	}
+
+	setMemberTimeTitle(socketId, time) {
+		const member = this.members.find(m => m.id === socketId);
+		if (member) {
+			member.timeTitle = time;
+			return true;
+		}
+		return false;
+	}
+
+	setMemberTimeArtist(socketId, time) {
+		const member = this.members.find(m => m.id === socketId);
+		if (member) {
+			member.timeArtist = time;
 			return true;
 		}
 		return false;
